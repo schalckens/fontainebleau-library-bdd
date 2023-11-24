@@ -9,7 +9,7 @@
 <form >
     @csrf
 
-    <div>v
+    <div>
         <label for="email">Adresse e-mail</label>
         <input type="email" id="email" name="email" value="{{ old('email') }}" required autofocus>
     </div>
