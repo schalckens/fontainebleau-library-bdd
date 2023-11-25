@@ -177,97 +177,6 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Fonction borrowBook
-CREATE FUNCTION borrowBook(idUser INT, idBorrowType INT, idBook INT) RETURNS VOID AS
-$$
-DECLARE
-    isBanned BOOLEAN := false;
-    bookAvailability INT := 0;
-    currentBorrowedCount INT := 0;
-BEGIN
-    -- Vérifie si l'utilisateur est banni
-    SELECT u.isBanned
-    INTO isBanned
-    FROM "User" u
-    WHERE u.id = idUser;
-
-    IF isBanned THEN
-        -- Si l'utilisateur est banni, l'emprunt est refusé.
-        RAISE EXCEPTION 'L''utilisateur est banni et ne peut pas emprunter de livre.';
-    ELSE
-        -- Si l'utilisateur n'est pas banni
-        -- Vérifie le nombre d'emprunts actuels pour l'utilisateur (isReturned = false)
-        SELECT COUNT(*)
-        INTO currentBorrowedCount
-        FROM Log_Borrowing
-        WHERE id_User = idUser
-        AND isReturned = false;
-
-        IF currentBorrowedCount >= 4 THEN
-            -- Si l'utilisateur a atteint le nombre maximal d'emprunts, l'emprunt est refusé.
-            RAISE EXCEPTION 'L''utilisateur a atteint le nombre maximal d''emprunts simultanés.';
-        ELSE
-            -- Si l'utilisateur n'a pas atteint le nombre maximal d'emprunts
-            -- Vérifie si le livre est disponible
-			SELECT COUNT(*)
-			INTO bookAvailability
-			FROM Log_Borrowing
-			WHERE id_Book = idBook
-			AND isReturned = false;
-
-			IF bookAvailability > 0 THEN
-                -- Si le livre n'est pas disponible, l'emprunt est refusé.
-                RAISE EXCEPTION 'Le livre n''est pas disponible pour l''emprunt.';
-            ELSE
-                -- Vérifie si l'emprunt n'existe pas déjà
-                IF NOT EXISTS (
-                    SELECT 1
-                    FROM log_borrowing
-                    WHERE id_user = idUser
-                    AND id_Book = idBook
-                    AND isReturned = false
-                ) THEN
-                    -- Si toutes les conditions sont remplies et que l'emprunt n'existe pas, l'emprunt est autorisé.
-                    INSERT INTO log_borrowing (id_user, id_BorrowType, id_book, dateEntry, isReturned)
-                    VALUES (idUser, idBorrowType, idBook, CURRENT_DATE, false);
-                ELSE
-                    -- Sinon, l'emprunt est refusé car il existe déjà un emprunt pour cet utilisateur et ce livre non retourné.
-                    RAISE EXCEPTION 'L''utilisateur a déjà emprunté ce livre.';
-                END IF;
-            END IF;
-        END IF;
-    END IF;
-END;
-$$ LANGUAGE plpgsql;
-
-
-CREATE OR REPLACE FUNCTION set_dates_log_state() RETURNS TRIGGER AS $$
-BEGIN
-    NEW.dateEntry := CURRENT_DATE; -- Définit la date d'entrée du log comme la date actuelle
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-
--- fonctions et triggers pour les tests
-
-CREATE OR REPLACE FUNCTION set_dates() RETURNS TRIGGER AS $$
-BEGIN
-    NEW.dateStart := CURRENT_DATE; -- Définit la date de début comme la date actuelle
-    NEW.dateEnd := CURRENT_DATE + INTERVAL '1 month'; -- Définit la date de fin comme 1 mois après la date de début
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-
-CREATE TRIGGER set_dates_trigger_banishment
-BEFORE INSERT ON Banishment
-FOR EACH ROW EXECUTE FUNCTION set_dates();
-
-CREATE TRIGGER set_dates_trigger_penalty
-BEFORE INSERT ON Penalty
-FOR EACH ROW EXECUTE FUNCTION set_dates();
-
 --Création des triggers
 
 CREATE FUNCTION update_penalty_and_banish()
@@ -284,23 +193,18 @@ FOR EACH ROW
 EXECUTE FUNCTION update_penalty_and_banish();
 
 
-CREATE OR REPLACE FUNCTION borrow_book_trigger_function()
+CREATE OR REPLACE FUNCTION trigger_unbanUsers()
 RETURNS TRIGGER AS $$
 BEGIN
-    PERFORM borrowBook(NEW.id_User, NEW.id_BorrowType, NEW.id_Book);
+    PERFORM unbanUsers();
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER log_borrowing_trigger
-AFTER INSERT ON Log_Borrowing
-FOR EACH ROW
-EXECUTE FUNCTION borrow_book_trigger_function();
+CREATE TRIGGER trigger_unbanUsers
+BEFORE INSERT ON Log_borrowing
+FOR EACH ROW EXECUTE FUNCTION trigger_unbanUsers();
 
-
-CREATE TRIGGER set_dates_trigger_log_state
-BEFORE INSERT ON Log_State
-FOR EACH ROW EXECUTE FUNCTION set_dates_log_state();
 
 
 -- Contraintes particulières
@@ -311,22 +215,7 @@ ALTER TABLE Penalty
     ALTER COLUMN id_User SET NOT NULL;
 
 ALTER TABLE Banishment
-ADD CHECK (dateStart = CURRENT_DATE);
-
-ALTER TABLE Banishment
 ADD CHECK (dateEnd > dateStart OR dateEnd IS NULL);
-
-ALTER TABLE Penalty
-ADD CHECK (dateStart = CURRENT_DATE);
-
-ALTER TABLE Penalty
-ADD CHECK (dateStart = CURRENT_DATE);
-
-ALTER TABLE Log_borrowing
-ADD CHECK (dateEntry = CURRENT_DATE);
-
-ALTER TABLE Log_State
-ADD CHECK (dateEntry = CURRENT_DATE);
 
 -- Contraintes de vérification (CHECK constraints)
 ALTER TABLE State_Type
@@ -343,13 +232,13 @@ VALUES
     ('Hugo', 'Mercier', 'hugo@example.com', 'hugopasse', TRUE),
     ('Clara', 'Giroux', 'clara@example.com', 'clarapasse', FALSE),
 	('Romain', 'Renaud', 'romain@example.com', 'romainpasse', FALSE),
-    ('Margaux', 'Caron', 'margaux@example.com', 'margauxpasse', TRUE),
+    ('Margaux', 'Caron', 'margaux@example.com', 'margauxpasse', FALSE),
     ('Sébastien', 'Léonard', 'sebastien@example.com', 'sabastienpasse', FALSE),
 	('Lola', 'Moreau', 'lola@example.com', 'lolapasse', FALSE),
-    ('Alexandre', 'Picard', 'alexandre@example.com', 'alexandrepasse', TRUE),
+    ('Alexandre', 'Picard', 'alexandre@example.com', 'alexandrepasse', FALSE),
     ('Charlotte', 'Dufresne', 'charlotte@example.com', 'charlottepasse', FALSE),
 	('Tristan', 'Girard', 'tristan@example.com', 'tristanpasse', FALSE),
-    ('Emma', 'Roux', 'emma@example.com', 'motdepasse23', TRUE),
+    ('Emma', 'Roux', 'emma@example.com', 'motdepasse23', FALSE),
     ('Nicolas', 'Boucher', 'nicolas@example.com', 'nicolaspasse', FALSE),
 	('Antoine', 'Lefevre', 'antoine@example.com', 'antoinepasse', FALSE),
     ('Camille', 'Dubois', 'camille@example.com', 'camillepasse', FALSE),
@@ -381,25 +270,13 @@ VALUES
 
 INSERT INTO Banishment (id_Admin, id_User, description, dateStart, dateEnd)
 VALUES
-    (1, 2, 'Dégradation répétée d''emprunts', '2023-11-09', '2023-12-09'),
-    (2, 5, '3 retards de rendu d''emprunts', '2023-11-09', '2023-12-09'),
-	(1, 8, 'Non-respect du règlement', '2023-11-09', '2023-12-09'),
-    (2, 11, '3 Retards de restitution d''emprunts', '2023-11-09', '2023-12-09');
+    (1, 2, '3 Pénalités', '2023-10-11', '2023-11-30');
 	
 INSERT INTO Penalty (id_Admin, id_User, description, dateStart, dateEnd)
 VALUES
-    (1, 2, 'Dégradation d''emprunt', '2023-11-09', '2023-12-09'),
-	(1, 2, 'Dégradation d''emprunt', '2023-11-09', '2023-12-09'),
-	(1, 2, 'Dégradation d''emprunt', '2023-11-09', '2023-12-09'),
-    (2, 5, 'Retard de rendu d''emprunt', '2023-11-09', '2023-12-09'),
-	(2, 5, 'Retard de rendu d''emprunt', '2023-11-09', '2023-12-09'),
-	(2, 5, 'Retard de rendu d''emprunt', '2023-11-09', '2023-12-09'),
-    (1, 8, 'Non-respect du règlement', '2023-11-09', '2023-12-09'),
-	(1, 8, 'Non-respect du règlement', '2023-11-09', '2023-12-09'),
-	(1, 8, 'Non-respect du règlement', '2023-11-09', '2023-12-09'),
-    (2, 11, 'Retard de restitution d''un livre emprunté', '2023-11-09', '2023-12-09'),
-	(2, 11, 'Retard de restitution d''un livre emprunté', '2023-11-09', '2023-12-09'),
-	(2, 11, 'Retard de restitution d''un livre emprunté', '2023-11-09', '2023-12-09');
+    (1, 2, 'Dégradation d''emprunt', '2023-09-24', '2023-10-24'),
+	(1, 2, 'Retard de rendu d''emprunt', '2023-09-30', '2023-10-30'),
+	(1, 2, 'Dégradation d''emprunt', '2023-10-11', '2023-11-11');
 
 
 INSERT INTO State_Type (condition)
@@ -434,8 +311,8 @@ VALUES
     (1),
     (2),
     (3),
-	(4);
-	(5);
+	(4),
+	(5),
 	(6);
 
 
@@ -457,10 +334,15 @@ VALUES
 
 INSERT INTO Log_Borrowing (id_User, id_BorrowType, id_Book, dateEntry, isReturned)
 VALUES
-    (1, 1, 1, CURRENT_DATE, TRUE),
-    (2, 2, 2, CURRENT_DATE, TRUE),
-	(3, 3, 4, CURRENT_DATE, FALSE),
-    (4, 1, 1, CURRENT_DATE, FALSE);
+    (2, 1, 1, '2023-09-02', FALSE),
+    (2, 2, 1, '2023-09-05', FALSE),
+	(2, 4, 1, '2023-09-30', TRUE),
+    (2, 2, 2, '2023-09-15', FALSE),
+	(2, 2, 2, '2023-09-24', TRUE),
+	(2, 2, 3, '2023-10-02', FALSE),
+	(2, 2, 3, '2023-10-11', TRUE),
+	(1, 2, 4, '2023-11-18', FALSE),
+	(3, 1, 5, '2023-11-24', FALSE);
 
 
 INSERT INTO Author (name, surname, description)
@@ -507,12 +389,56 @@ VALUES
 	(3, 6);
 
 
--- Destruction des fonctions / triggers de tests
+-- Autres contraintes ajoutées après insertion des données test 
 
-DROP FUNCTION IF EXISTS set_dates() CASCADE;
+CREATE OR REPLACE FUNCTION set_dateEntry() RETURNS TRIGGER AS $$
+BEGIN
+    NEW.dateEntry := CURRENT_DATE;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS set_dates_trigger_penalty ON Penalty;
+CREATE TRIGGER trigger_set_dateEntry
+BEFORE INSERT ON Log_borrowing
+FOR EACH ROW EXECUTE FUNCTION set_dateEntry();
 
-DROP TRIGGER IF EXISTS set_dates_trigger_banishment ON Banishment;
+CREATE OR REPLACE FUNCTION set_dates_log_state() RETURNS TRIGGER AS $$
+BEGIN
+    NEW.dateEntry := CURRENT_DATE; -- Définit la date d'entrée du log comme la date actuelle
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER set_dates_trigger_log_state
+BEFORE INSERT ON Log_State
+FOR EACH ROW EXECUTE FUNCTION set_dates_log_state();
+
+-- Création du déclencheur pour mettre à jour dateStart à CURRENT_DATE lors d'une insertion
+CREATE OR REPLACE FUNCTION set_dateStart_Penalty()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.dateStart := CURRENT_DATE;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Création du déclencheur pour utiliser la fonction lors de l'insertion
+CREATE TRIGGER before_insert_Penalty
+BEFORE INSERT ON Penalty
+FOR EACH ROW EXECUTE FUNCTION set_dateStart_Penalty();
+
+-- Création du déclencheur pour mettre à jour dateStart à CURRENT_DATE lors d'une insertion
+CREATE OR REPLACE FUNCTION set_dateStart_Banishment()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.dateStart := CURRENT_DATE;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Création du déclencheur pour utiliser la fonction lors de l'insertion
+CREATE TRIGGER before_insert_Banishment
+BEFORE INSERT ON Banishment
+FOR EACH ROW EXECUTE FUNCTION set_dateStart_Banishment();
 
 
